@@ -131,7 +131,7 @@ service cloud.firestore {
             'id', 'userId', 'targetText', 'category', 'difficulty',
             'overallScore', 'accuracyScore', 'fluencyScore', 'completenessScore',
             'expectedIpa', 'detectedText', 'feedback', 'mispronouncedWords',
-            'tongueMouthAdvice', 'createdAt'
+            'tongueMouthAdvice', 'assessmentId', 'scoringSource', 'createdAt'
           ])
           && isNonEmptyString(request.resource.data.targetText, 1000)
           && isOptionalString(request.resource.data, 'category', 50)
@@ -145,10 +145,31 @@ service cloud.firestore {
           && isOptionalString(request.resource.data, 'feedback', 5000)
           && isOptionalString(request.resource.data, 'mispronouncedWords', 10000)
           && isOptionalString(request.resource.data, 'tongueMouthAdvice', 5000)
+          && isOptionalString(request.resource.data, 'assessmentId', 128)
+          && (!('scoringSource' in request.resource.data)
+            || request.resource.data.scoringSource in ['api', 'gemini', 'ruleBased'])
           && isNonEmptyString(request.resource.data.createdAt, 40);
 
         allow update: if false;
         allow delete: if isOwner(userId);
+      }
+
+      // -------------------------------------------------------------------
+      // M4 – AI Pronunciation: chỉ server (Admin SDK) ghi, nên client
+      // không thể tự sửa điểm hay thống kê âm vị.
+      // -------------------------------------------------------------------
+      match /pronunciation_attempts/{attemptId} {
+        allow get, list: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /phoneme_stats/{phonemeId} {
+        allow get, list: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /pronunciation_idempotency/{key} {
+        allow read, write: if false;
       }
 
       // -------------------------------------------------------------------

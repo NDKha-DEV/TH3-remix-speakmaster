@@ -1,16 +1,24 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+
+import '../models/assessment.dart';
 import '../models/models.dart';
-import '../services/ai_pronunciation_service.dart';
+import '../services/audio_recorder_service.dart';
+import '../services/pronunciation_api.dart';
+import '../services/pronunciation_engine.dart';
+import '../widgets/assessment_result_view.dart';
 
 class PronunciationScreen extends StatefulWidget {
-  final AIPronunciationService aiService;
-  final Function(int minutes, int score, PronunciationResult result, LessonSentence sentence) onPracticeCompleted;
+  final PronunciationEngine engine;
+  final Future<void> Function(Assessment assessment, LessonSentence sentence)
+      onPracticeCompleted;
 
   const PronunciationScreen({
     super.key,
-    required this.aiService,
+    required this.engine,
     required this.onPracticeCompleted,
   });
 
@@ -21,15 +29,22 @@ class PronunciationScreen extends StatefulWidget {
 class _PronunciationScreenState extends State<PronunciationScreen> {
   final stt.SpeechToText _speech = stt.SpeechToText();
   final FlutterTts _tts = FlutterTts();
+  final AudioRecorderService _recorder = AudioRecorderService();
 
+  late ScoringMode _mode = widget.engine.mode;
   bool _isRecording = false;
   bool _isAnalyzing = false;
   String _spokenTranscript = '';
   int _currentIndex = 0;
-  PronunciationResult? _result;
-  WordAnalysis? _selectedWord;
+  Assessment? _result;
+  RecordingResult? _lastRecording;
+  String? _error;
+  Map<String, PhonemeInfo> _catalog = const {};
+  DateTime? _recordStartedAt;
+  Timer? _ticker;
+  int _elapsedSeconds = 0;
 
-  final List<LessonSentence> _sentences = const [
+  static const List<LessonSentence> _sentences = [
     LessonSentence(
       id: 's1',
       text: 'She sells seashells by the seashore.',
@@ -38,85 +53,200 @@ class _PronunciationScreenState extends State<PronunciationScreen> {
       category: 'TongueTwister',
       difficulty: 'Intermediate',
       focusSound: '/ʃ/ vs /s/',
-      tips: 'Âm /ʃ/ cần chu môi tròn và đẩy luồng hơi dày; âm /s/ khóe miệng kéo ngang.',
+      tips:
+          'Âm /ʃ/ cần chu môi tròn và đẩy luồng hơi dày; âm /s/ khóe miệng kéo ngang.',
     ),
     LessonSentence(
       id: 's2',
       text: 'I think that this is the best solution for our team.',
-      translation: 'Tôi nghĩ rằng đây là giải pháp tốt nhất cho đội ngũ của chúng ta.',
+      translation:
+          'Tôi nghĩ rằng đây là giải pháp tốt nhất cho đội ngũ của chúng ta.',
       ipa: '/aɪ θɪŋk ðæt ðɪs ɪz ðə bɛst səˈluːʃən fɔːr ˈaʊər tiːm/',
       category: 'Daily',
       difficulty: 'Beginner',
       focusSound: '/θ/ & /ð/',
-      tips: 'Đặt đầu lưỡi nhẹ nhàng giữa hai hàm răng khi phát âm "think" /θ/ và "this" /ð/.',
+      tips:
+          'Đặt đầu lưỡi nhẹ nhàng giữa hai hàm răng khi phát âm "think" /θ/ và "this" /ð/.',
     ),
     LessonSentence(
       id: 's3',
-      text: 'Working in a comfortable environment increases productivity significantly.',
-      translation: 'Làm việc trong môi trường thoải mái giúp tăng năng suất đáng kể.',
-      ipa: '/ˈwɜːrkɪŋ ɪn ə ˈkʌmftərbəl ɪnˈvaɪrənmənt ɪnˈkriːsɪz ˌproʊdʌkˈtɪvəti sɪɡˈnɪfɪkəntli/',
+      text:
+          'Working in a comfortable environment increases productivity significantly.',
+      translation:
+          'Làm việc trong môi trường thoải mái giúp tăng năng suất đáng kể.',
+      ipa:
+          '/ˈwɜːrkɪŋ ɪn ə ˈkʌmftərbəl ɪnˈvaɪrənmənt ɪnˈkriːsɪz ˌproʊdʌkˈtɪvəti sɪɡˈnɪfɪkəntli/',
       category: 'Business',
       difficulty: 'Advanced',
       focusSound: 'Trọng âm & Âm đuôi',
-      tips: '"Comfortable" chỉ có 3 âm tiết /ˈkʌmftərbəl/, chú ý âm đuôi /ɪz/ ở "increases".',
+      tips:
+          '"Comfortable" chỉ có 3 âm tiết /ˈkʌmftərbəl/, chú ý âm đuôi /ɪz/ ở "increases".',
     ),
   ];
 
   LessonSentence get _currentSentence => _sentences[_currentIndex];
 
-  Future<void> _speakSample(String text) async {
+  @override
+  void initState() {
+    super.initState();
+    _checkEngine();
+  }
+
+  Future<void> _checkEngine() async {
+    final mode = await widget.engine.refreshAvailability();
+    final catalog = await widget.engine.phonemeCatalog();
+    if (!mounted) return;
+    setState(() {
+      _mode = mode;
+      _catalog = catalog;
+    });
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    _recorder.dispose();
+    _speech.cancel();
+    _tts.stop();
+    super.dispose();
+  }
+
+  Future<void> _speak(String text) async {
     await _tts.setLanguage('en-US');
     await _tts.setSpeechRate(0.45);
     await _tts.speak(text);
   }
 
+  void _resetResult() {
+    _result = null;
+    _error = null;
+    _lastRecording = null;
+    _spokenTranscript = '';
+  }
+
+  void _startTicker() {
+    _elapsedSeconds = 0;
+    _ticker?.cancel();
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() => _elapsedSeconds++);
+      if (_elapsedSeconds >= AudioRecorderService.maxDuration.inSeconds)
+        _toggleRecording();
+    });
+  }
+
   Future<void> _toggleRecording() async {
+    if (_isAnalyzing) return;
     if (!_isRecording) {
-      final available = await _speech.initialize();
-      if (available) {
-        setState(() {
-          _isRecording = true;
-          _spokenTranscript = '';
-          _result = null;
-          _selectedWord = null;
-        });
-        await _speech.listen(
-          localeId: 'en_US',
-          onResult: (val) {
-            setState(() {
-              _spokenTranscript = val.recognizedWords;
-            });
-          },
-        );
-      }
+      await _startRecording();
     } else {
-      await _speech.stop();
-      setState(() {
-        _isRecording = false;
-        _isAnalyzing = true;
-      });
-
-      final res = await widget.aiService.analyzePronunciation(
-        targetText: _currentSentence.text,
-        userSpokenText: _spokenTranscript,
-        category: _currentSentence.category,
-        difficulty: _currentSentence.difficulty,
-      );
-
-      setState(() {
-        _result = res;
-        _selectedWord = res.wordAnalysis.isNotEmpty ? res.wordAnalysis.first : null;
-        _isAnalyzing = false;
-      });
-
-      widget.onPracticeCompleted(1, res.overallScore, res, _currentSentence);
+      await _stopAndAnalyze();
     }
   }
 
-  Color _statusColor(String status) {
-    if (status == 'correct') return Colors.teal;
-    if (status == 'warning') return Colors.amber.shade700;
-    return Colors.redAccent;
+  Future<void> _startRecording() async {
+    setState(_resetResult);
+    if (_mode == ScoringMode.audio) {
+      final granted = await _recorder.ensurePermission();
+      if (!granted) {
+        _showPermissionDenied();
+        return;
+      }
+      await _recorder.start();
+    } else {
+      final available = await _speech.initialize();
+      if (!available) {
+        _showPermissionDenied();
+        return;
+      }
+      await _speech.listen(
+        listenOptions: stt.SpeechListenOptions(
+          localeId: 'en_US',
+          listenFor: AudioRecorderService.maxDuration,
+        ),
+        onResult: (val) =>
+            setState(() => _spokenTranscript = val.recognizedWords),
+      );
+    }
+    _recordStartedAt = DateTime.now();
+    _startTicker();
+    setState(() => _isRecording = true);
+  }
+
+  Future<void> _stopAndAnalyze() async {
+    _ticker?.cancel();
+    setState(() {
+      _isRecording = false;
+      _isAnalyzing = true;
+    });
+    final sentence = _currentSentence;
+    try {
+      final Assessment result;
+      if (_mode == ScoringMode.audio) {
+        final rec = await _recorder.stop();
+        if (rec == null) {
+          setState(() {
+            _isAnalyzing = false;
+            _error = 'Không ghi được âm thanh, hãy thử lại.';
+          });
+          return;
+        }
+        _lastRecording = rec;
+        result = await widget.engine
+            .assessAudio(audio: rec.file, sentence: sentence);
+      } else {
+        await _speech.stop();
+        final started = _recordStartedAt ?? DateTime.now();
+        result = await widget.engine.assessTranscript(
+          transcript: _spokenTranscript,
+          sentence: sentence,
+          durationMs: DateTime.now().difference(started).inMilliseconds,
+        );
+      }
+      if (!mounted) return;
+      setState(() {
+        _result = result;
+        _isAnalyzing = false;
+      });
+      await widget.onPracticeCompleted(result, sentence);
+    } on PronunciationApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isAnalyzing = false;
+        _error = e.requestId == null
+            ? e.userMessage
+            : '${e.userMessage}\n(Mã yêu cầu: ${e.requestId})';
+      });
+      if (!e.isUserError) _offerFallback();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isAnalyzing = false;
+        _error = 'Có lỗi khi chấm điểm: $e';
+      });
+    }
+  }
+
+  void _showPermissionDenied() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+            'Cần quyền sử dụng micro để thu âm. Hãy bật quyền Micro cho SpeakMaster trong Cài đặt.'),
+      ),
+    );
+  }
+
+  void _offerFallback() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 6),
+        content: const Text('Máy chủ chấm điểm chưa sẵn sàng.'),
+        action: SnackBarAction(
+          label: 'Chấm dự phòng',
+          onPressed: () => setState(() => _mode = ScoringMode.transcript),
+        ),
+      ),
+    );
   }
 
   @override
@@ -124,214 +254,198 @@ class _PronunciationScreenState extends State<PronunciationScreen> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        Card(
-          elevation: 2,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Chip(
-                      label: Text(_currentSentence.category),
-                      backgroundColor: Colors.teal.withOpacity(0.15),
-                    ),
-                    Text(
-                      'Câu ${_currentIndex + 1}/${_sentences.length}',
-                      style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.grey),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  _currentSentence.text,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.w800,
-                      ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  _currentSentence.ipa,
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    color: Colors.teal,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  '"${_currentSentence.translation}"',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey[600]),
-                ),
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.amber.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.lightbulb_outline, color: Colors.amber),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          'Mẹo khẩu hình (${_currentSentence.focusSound}): ${_currentSentence.tips}',
-                          style: const TextStyle(fontSize: 13),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                if (_isRecording) ...[
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Đang lắng nghe giọng nói của bạn...',
-                    style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold),
-                  ),
-                  if (_spokenTranscript.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: Text('"$_spokenTranscript"'),
-                    ),
-                ],
-                const SizedBox(height: 20),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    OutlinedButton.icon(
-                      onPressed: () => _speakSample(_currentSentence.text),
-                      icon: const Icon(Icons.volume_up),
-                      label: const Text('Nghe chuẩn'),
-                    ),
-                    FloatingActionButton.extended(
-                      onPressed: _isAnalyzing ? null : _toggleRecording,
-                      backgroundColor: _isRecording ? Colors.redAccent : Colors.teal,
-                      icon: Icon(_isRecording ? Icons.stop : Icons.mic, color: Colors.white),
-                      label: Text(
-                        _isRecording ? 'Chấm điểm' : 'Thu âm',
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: () {
-                        setState(() {
-                          _currentIndex = (_currentIndex + 1) % _sentences.length;
-                          _result = null;
-                          _selectedWord = null;
-                        });
-                      },
-                      icon: const Icon(Icons.arrow_forward_ios),
-                      tooltip: 'Câu tiếp theo',
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
+        _modeBanner(),
+        const SizedBox(height: 12),
+        _sentenceCard(context),
         if (_isAnalyzing)
           const Padding(
             padding: EdgeInsets.all(24.0),
-            child: Center(child: CircularProgressIndicator()),
+            child: Column(
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 10),
+                Text('AI đang phân tích phát âm...'),
+              ],
+            ),
+          ),
+        if (_error != null)
+          Card(
+            color: Colors.red.withValues(alpha: 0.08),
+            child: ListTile(
+              leading: const Icon(Icons.error_outline, color: Colors.redAccent),
+              title: Text(_error!),
+            ),
           ),
         if (_result != null) ...[
-          const SizedBox(height: 20),
-          Card(
-            elevation: 2,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+          const SizedBox(height: 16),
+          AssessmentResultView(
+              assessment: _result!, onSpeak: _speak, catalog: _catalog),
+        ],
+      ],
+    );
+  }
+
+  Widget _modeBanner() {
+    final audio = _mode == ScoringMode.audio;
+    return Row(
+      children: [
+        Icon(audio ? Icons.graphic_eq : Icons.text_fields,
+            size: 18, color: audio ? Colors.teal : Colors.amber.shade800),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            audio
+                ? 'Chấm trên audio (Pronunciation API)'
+                : 'Chế độ dự phòng: chấm theo chữ nhận dạng',
+            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+          ),
+        ),
+        if (widget.engine.hasApi && !_isRecording && !_isAnalyzing)
+          TextButton(
+            onPressed: () async {
+              if (audio) {
+                setState(() => _mode = ScoringMode.transcript);
+              } else {
+                await _checkEngine();
+                if (mounted && _mode != ScoringMode.audio) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content: Text('Chưa kết nối được Pronunciation API.')),
+                  );
+                }
+              }
+            },
+            child: Text(audio ? 'Dùng dự phòng' : 'Thử lại API'),
+          ),
+      ],
+    );
+  }
+
+  Widget _sentenceCard(BuildContext context) {
+    final s = _currentSentence;
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Chip(
+                    label: Text(s.category),
+                    backgroundColor: Colors.teal.withValues(alpha: 0.15)),
+                Text(
+                  'Câu ${_currentIndex + 1}/${_sentences.length}',
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold, color: Colors.grey),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Text(
+              s.text,
+              textAlign: TextAlign.center,
+              style: Theme.of(context)
+                  .textTheme
+                  .headlineSmall
+                  ?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              s.ipa,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  fontFamily: 'monospace',
+                  color: Colors.teal,
+                  fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '"${s.translation}"',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  fontStyle: FontStyle.italic, color: Colors.grey[600]),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.amber.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Row(
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        'Kết Quả Phân Tích Âm Vị AI',
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                      ),
-                      CircleAvatar(
-                        radius: 26,
-                        backgroundColor: Colors.teal,
-                        child: Text(
-                          '${_result!.overallScore}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w900,
-                            fontSize: 18,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: _result!.wordAnalysis.map((w) {
-                      final color = _statusColor(w.status);
-                      return ActionChip(
-                        backgroundColor: color.withOpacity(0.12),
-                        side: BorderSide(color: color),
-                        label: Text(
-                          '${w.word} (${w.score}%)',
-                          style: TextStyle(color: color, fontWeight: FontWeight.bold),
-                        ),
-                        onPressed: () => setState(() => _selectedWord = w),
-                      );
-                    }).toList(),
-                  ),
-                  if (_selectedWord != null) ...[
-                    const SizedBox(height: 14),
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.teal.withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Từ "${_selectedWord!.word}" - Chuẩn IPA: ${_selectedWord!.expectedIpa}',
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          const SizedBox(height: 4),
-                          Text('Chi tiết: ${_selectedWord!.specificError}'),
-                        ],
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 16),
-                  Text(
-                    'Nhận xét AI: ${_result!.vietnameseSummary}',
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 8),
-                  Text('Khẩu hình & Đặt lưỡi: ${_result!.tongueMouthAdvice}'),
-                  const SizedBox(height: 12),
-                  const Text(
-                    'Bài tập đề xuất:',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  ..._result!.recommendedDrills.map(
-                    (d) => Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Text('• $d'),
-                    ),
+                  const Icon(Icons.lightbulb_outline, color: Colors.amber),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text('Mẹo khẩu hình (${s.focusSound}): ${s.tips}',
+                        style: const TextStyle(fontSize: 13)),
                   ),
                 ],
               ),
             ),
-          ),
-        ],
-      ],
+            if (_isRecording) ...[
+              const SizedBox(height: 16),
+              Text(
+                'Đang thu âm... ${_elapsedSeconds}s / ${AudioRecorderService.maxDuration.inSeconds}s',
+                style: const TextStyle(
+                    color: Colors.redAccent, fontWeight: FontWeight.bold),
+              ),
+              if (_spokenTranscript.isNotEmpty)
+                Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text('"$_spokenTranscript"')),
+            ],
+            const SizedBox(height: 20),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: () => _speak(s.text),
+                  icon: const Icon(Icons.volume_up),
+                  label: const Text('Nghe chuẩn'),
+                ),
+                FloatingActionButton.extended(
+                  heroTag: 'record',
+                  onPressed: _isAnalyzing ? null : _toggleRecording,
+                  backgroundColor:
+                      _isRecording ? Colors.redAccent : Colors.teal,
+                  icon: Icon(_isRecording ? Icons.stop : Icons.mic,
+                      color: Colors.white),
+                  label: Text(
+                    _isRecording ? 'Chấm điểm' : 'Thu âm',
+                    style: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                IconButton(
+                  onPressed: _isRecording || _isAnalyzing
+                      ? null
+                      : () => setState(() {
+                            _currentIndex =
+                                (_currentIndex + 1) % _sentences.length;
+                            _resetResult();
+                          }),
+                  icon: const Icon(Icons.arrow_forward_ios),
+                  tooltip: 'Câu tiếp theo',
+                ),
+              ],
+            ),
+            if (_lastRecording != null && !_isRecording)
+              Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: TextButton.icon(
+                  onPressed: () => _recorder.play(_lastRecording!.file),
+                  icon: const Icon(Icons.play_circle_outline),
+                  label: Text(
+                      'Nghe lại giọng của bạn (${(_lastRecording!.duration.inMilliseconds / 1000).toStringAsFixed(1)}s)'),
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }

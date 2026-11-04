@@ -9,7 +9,10 @@ All user data lives under the user's own document, so every rule reduces to "the
 users/{uid}                              UserProfile
 ├── practice_records/{recordId}          PracticeRecord   (immutable)
 ├── daily_stats/{YYYY-MM-DD}             DailyStat        (one per local day)
-└── fcm_tokens/{fcmToken}                FcmToken         (one per device)
+├── fcm_tokens/{fcmToken}                FcmToken         (one per device)
+├── pronunciation_attempts/{attemptId}   PronunciationAttempt (M4, server-written, owner read-only)
+├── phoneme_stats/{phonemeId}            PhonemeStat      (M4, server-written, owner read-only)
+└── pronunciation_idempotency/{key}      (M4, server-only, no client access)
 ```
 
 ## `users/{uid}` — UserProfile
@@ -37,7 +40,7 @@ users/{uid}                              UserProfile
 
 `recordId` matches `^[a-zA-Z0-9_-]{1,128}$` and equals `id`. Records are append-only (no updates); owner may delete.
 
-`id`, `userId`, `targetText` (1–1000 chars), `category`, `difficulty`, `overallScore` / `accuracyScore` / `fluencyScore` / `completenessScore` (0–100), `expectedIpa`, `detectedText?`, `feedback`, `mispronouncedWords?`, `tongueMouthAdvice?` (nullable), `createdAt`.
+`id`, `userId`, `targetText` (1–1000 chars), `category`, `difficulty`, `overallScore` / `accuracyScore` / `fluencyScore` / `completenessScore` (0–100), `expectedIpa`, `detectedText?`, `feedback`, `mispronouncedWords?`, `tongueMouthAdvice?` (nullable), `assessmentId?` (M4 attempt id), `scoringSource?` (`api|gemini|ruleBased`), `createdAt`.
 
 ## `users/{uid}/daily_stats/{YYYY-MM-DD}` — DailyStat
 

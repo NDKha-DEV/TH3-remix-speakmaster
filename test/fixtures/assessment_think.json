@@ -1,0 +1,45 @@
+{
+  "id": "6f1c0b2e9a4d4c33a1f0d5e7b8c9a012",
+  "createdAt": "2026-11-04T08:30:00Z",
+  "referenceText": "Think about three things",
+  "recognizedText": "Sink about three things.",
+  "locale": "en-US",
+  "exerciseId": null,
+  "provider": "azure",
+  "durationMs": 2350,
+  "futureField": { "ignored": true },
+  "scores": { "pronunciation": 78.4, "accuracy": 74.0, "fluency": 88.0, "completeness": 100.0, "prosody": 81.0 },
+  "level": "good",
+  "words": [
+    {
+      "word": "think", "ipa": "θɪŋk", "accuracy": 45.0, "errorType": "Mispronunciation", "isError": true,
+      "offsetMs": 100, "durationMs": 320,
+      "phonemes": [
+        { "expected": "θ", "actual": "s", "accuracy": 8.0, "isError": true, "errorKind": "substitution",
+          "pattern": "th_substitution", "position": "initial", "offsetMs": 100, "durationMs": 80 },
+        { "expected": "ɪ", "actual": "ɪ", "accuracy": 90.0, "isError": false, "errorKind": null,
+          "pattern": null, "position": "medial", "offsetMs": 180, "durationMs": 80 }
+      ]
+    },
+    {
+      "word": "things", "ipa": "θɪŋz", "accuracy": 70.0, "errorType": "SomeNewType", "isError": true,
+      "phonemes": [
+        { "expected": "z", "actual": null, "accuracy": 5.0, "isError": true, "errorKind": "deletion",
+          "pattern": "ending_s_drop", "position": "final" },
+        { "expected": "θ", "actual": "θ", "accuracy": 80.0, "isError": false, "errorKind": "brand_new_kind" }
+      ]
+    }
+  ],
+  "feedback": [
+    { "priority": 2, "kind": "praise", "target": "good", "messageVi": "Tốt lắm (78/100)!",
+      "messageEn": "Good job (78/100)!", "minimalPair": null, "practiceWords": [], "exerciseIds": [] },
+    {
+      "priority": 1, "kind": "phoneme", "target": "θ",
+      "messageVi": "Âm /θ/ trong \"think\" đang bị đọc thành /s/.",
+      "messageEn": "/θ/ in \"think\" sounds like /s/.",
+      "minimalPair": ["think", "sink"],
+      "practiceWords": ["think", "three", "mouth"],
+      "exerciseIds": ["ex_th_01"]
+    }
+  ]
+}

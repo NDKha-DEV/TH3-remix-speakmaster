@@ -152,6 +152,26 @@ test('practice_records: owner creates valid immutable records', async () => {
   await assertSucceeds(deleteDoc(ref));
 });
 
+test('practice_records: accepts M4 assessment link fields', async () => {
+  const ref = (id: string) => doc(aliceDb(), 'users', ALICE, 'practice_records', id);
+  await assertSucceeds(setDoc(ref('rec_m4'), practiceRecord('rec_m4', { assessmentId: 'att_123', scoringSource: 'api' })));
+  await assertSucceeds(setDoc(ref('rec_m4b'), practiceRecord('rec_m4b', { scoringSource: 'ruleBased' })));
+  await assertFails(setDoc(ref('rec_m4c'), practiceRecord('rec_m4c', { scoringSource: 'manual' })));
+});
+
+test('M4 collections are server-written and owner read-only', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'users', ALICE, 'pronunciation_attempts', 'att_1'), { id: 'att_1' });
+    await setDoc(doc(ctx.firestore(), 'users', ALICE, 'phoneme_stats', 'TH'), { phoneme: 'θ' });
+  });
+  await assertSucceeds(getDoc(doc(aliceDb(), 'users', ALICE, 'pronunciation_attempts', 'att_1')));
+  await assertSucceeds(getDoc(doc(aliceDb(), 'users', ALICE, 'phoneme_stats', 'TH')));
+  await assertFails(getDoc(doc(bobDb(), 'users', ALICE, 'pronunciation_attempts', 'att_1')));
+  await assertFails(setDoc(doc(aliceDb(), 'users', ALICE, 'pronunciation_attempts', 'att_2'), { id: 'att_2' }));
+  await assertFails(setDoc(doc(aliceDb(), 'users', ALICE, 'phoneme_stats', 'TH'), { phoneme: 'θ', attempts: 0 }));
+  await assertFails(getDoc(doc(aliceDb(), 'users', ALICE, 'pronunciation_idempotency', 'k1')));
+});
+
 test('practice_records: rejects invalid shapes', async () => {
   const col = (id: string) => doc(aliceDb(), 'users', ALICE, 'practice_records', id);
   await assertFails(setDoc(col('rec_2'), practiceRecord('rec_other')));

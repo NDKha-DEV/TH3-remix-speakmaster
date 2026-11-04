@@ -23,8 +23,25 @@ class AIPronunciationService {
     String category = 'General',
     String difficulty = 'Intermediate',
   }) async {
-    if (apiKey.isEmpty) {
-      return fallbackPhoneticAnalysis(targetText, userSpokenText);
+    final (result, _) = await analyzeWithSource(
+      targetText: targetText,
+      userSpokenText: userSpokenText,
+      category: category,
+      difficulty: difficulty,
+    );
+    return result;
+  }
+
+  /// Như [analyzePronunciation] nhưng cho biết kết quả đến từ Gemini (`true`)
+  /// hay bộ luật cục bộ (`false`), để UI ghi rõ độ tin cậy.
+  Future<(PronunciationResult, bool)> analyzeWithSource({
+    required String targetText,
+    required String userSpokenText,
+    String category = 'General',
+    String difficulty = 'Intermediate',
+  }) async {
+    if (apiKey.isEmpty || userSpokenText.trim().isEmpty) {
+      return (fallbackPhoneticAnalysis(targetText, userSpokenText), false);
     }
 
     try {
@@ -41,19 +58,48 @@ Yêu cầu phân tích:
 3. Đưa ra nhận xét tổng quan bằng tiếng Việt (vietnameseSummary) và hướng dẫn chi tiết khẩu hình miệng, vị trí đặt đầu lưỡi (tongueMouthAdvice).
 4. Đề xuất 3 bài tập luyện âm cụ thể (recommendedDrills).
 
-Trả về đúng định dạng JSON khớp schema của ứng dụng.
+Chỉ trả về JSON hợp lệ đúng schema sau (không thêm chữ nào khác):
+$_responseSchema
 ''';
 
-      final response = await _model.generateContent([Content.text(prompt)]);
-      if (response.text != null) {
-        final Map<String, dynamic> jsonMap = jsonDecode(response.text!);
-        return PronunciationResult.fromJson(jsonMap);
+      final response = await _model
+          .generateContent([Content.text(prompt)])
+          .timeout(const Duration(seconds: 20));
+      final text = response.text;
+      if (text != null) {
+        final Map<String, dynamic> jsonMap = jsonDecode(text);
+        final parsed = PronunciationResult.fromJson(jsonMap);
+        if (parsed.wordAnalysis.isNotEmpty) return (parsed, true);
       }
-      return fallbackPhoneticAnalysis(targetText, userSpokenText);
+      return (fallbackPhoneticAnalysis(targetText, userSpokenText), false);
     } catch (e) {
-      return fallbackPhoneticAnalysis(targetText, userSpokenText);
+      return (fallbackPhoneticAnalysis(targetText, userSpokenText), false);
     }
   }
+
+  static const _responseSchema = '''
+{
+  "overallScore": number 0-100,
+  "accuracyScore": number 0-100,
+  "fluencyScore": number 0-100,
+  "completenessScore": number 0-100,
+  "expectedIpa": string,
+  "vietnameseSummary": string,
+  "tongueMouthAdvice": string,
+  "wordAnalysis": [
+    {
+      "word": string,
+      "expectedIpa": string,
+      "detectedIpa": string,
+      "score": number 0-100,
+      "status": "correct" | "warning" | "incorrect",
+      "errorType": "none" | "missing_ending_sound" | "vowel_distortion" | "consonant_substitution" | "stress_error" | "omitted",
+      "phonemes": [ { "symbol": string (IPA), "status": "correct" | "warning" | "incorrect", "tip": string } ],
+      "specificError": string
+    }
+  ],
+  "recommendedDrills": [string, string, string]
+}''';
 
   // Thuật toán so sánh âm vị dự phòng (Phoneme Comparison Fallback)
   PronunciationResult fallbackPhoneticAnalysis(String targetText, String spokenText) {

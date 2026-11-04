@@ -54,3 +54,13 @@ npx tsx --test test/streak_logic.test.ts         # web streak logic
 (cd firestore-tests && npm install && npm test)  # security rules on the emulator (JDK 21+)
 flutter test                                     # Flutter services
 ```
+
+## App Flutter: M4 – AI Pronunciation
+
+App Flutter (`lib/`) chấm phát âm trên audio thật bằng Pronunciation API
+([LearnEnglish-vs-AI-pronun](https://github.com/tugduong57/LearnEnglish-vs-AI-pronun)),
+Gemini chỉ dùng làm dự phòng. Cách chạy và kiến trúc: [`docs/M4_AI_PRONUNCIATION.md`](docs/M4_AI_PRONUNCIATION.md).
+
+```bash
+flutter run --dart-define=PRONUN_API_BASE=http://10.0.2.2:8000
+```

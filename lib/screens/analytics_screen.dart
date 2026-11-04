@@ -3,17 +3,21 @@ import 'package:intl/intl.dart';
 
 import '../models/models.dart';
 import '../services/learning_stats_service.dart';
+import '../services/pronunciation_engine.dart';
+import 'assessment_history_screen.dart';
 
 class AnalyticsScreen extends StatelessWidget {
   final UserProfile userProfile;
   final List<PracticeRecord> history;
   final List<DailyStat> dailyStats;
+  final PronunciationEngine engine;
 
   const AnalyticsScreen({
     super.key,
     required this.userProfile,
     required this.history,
     required this.dailyStats,
+    required this.engine,
   });
 
   @override
@@ -79,6 +83,24 @@ class AnalyticsScreen extends StatelessWidget {
         const SizedBox(height: 10),
         _DailyActivityChart(dailyStats: dailyStats),
         const SizedBox(height: 20),
+        Card(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          child: ListTile(
+            leading: const Icon(Icons.manage_search, color: Colors.teal),
+            title: const Text(
+              'Lịch sử chấm AI & âm hay sai',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            subtitle: const Text('Xem lại phân tích từng âm vị của mỗi lần chấm'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => AssessmentHistoryScreen(engine: engine),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 20),
         const Text(
           'Lịch sử phiên học',
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
@@ -102,6 +124,16 @@ class AnalyticsScreen extends StatelessWidget {
                 borderRadius: BorderRadius.circular(16),
               ),
               child: ListTile(
+                onTap: record.assessmentId == null
+                    ? null
+                    : () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => AssessmentDetailScreen(
+                              engine: engine,
+                              assessmentId: record.assessmentId!,
+                            ),
+                          ),
+                        ),
                 title: Text(
                   record.targetText,
                   style: const TextStyle(fontWeight: FontWeight.bold),
