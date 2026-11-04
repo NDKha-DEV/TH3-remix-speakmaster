@@ -4,10 +4,21 @@ import 'package:google_sign_in/google_sign_in.dart';
 
 import '../models/models.dart';
 import 'learning_stats_service.dart';
+import 'notification_service.dart';
 
 class FirebaseService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _db = FirebaseFirestore.instance;
+
+  /// Enables the on-device cache so profile, history and streak data load
+  /// offline and practice results queue until the network is back.
+  /// Must run once, before the first Firestore read or write.
+  static void configurePersistence() {
+    FirebaseFirestore.instance.settings = const Settings(
+      persistenceEnabled: true,
+      cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
+    );
+  }
 
   User? get currentUser => _auth.currentUser;
   Stream<User?> get authStateChanges => _auth.authStateChanges();
@@ -71,8 +82,16 @@ class FirebaseService {
     final docRef = _db.collection('users').doc(user.uid);
     final snap = await docRef.get();
 
+    final timezone = NotificationService().timezoneName;
+
     if (snap.exists && snap.data() != null) {
-      return UserProfile.fromMap(snap.data()!);
+      final profile = UserProfile.fromMap(snap.data()!);
+      // Keep the stored timezone in sync so the daily reminder fires at local time.
+      if (profile.timezone != timezone) {
+        await updateUserProfile(user.uid, {'timezone': timezone});
+        return profile.copyWith(timezone: timezone);
+      }
+      return profile;
     }
 
     final newProfile = UserProfile(
@@ -89,6 +108,7 @@ class FirebaseService {
       level: 1,
       reminderTime: '20:00',
       reminderEnabled: true,
+      timezone: timezone,
     );
 
     await docRef.set({
@@ -151,9 +171,8 @@ class FirebaseService {
         today: today,
       );
       final streakIncreased = profile.lastActiveDate != today;
-      final longestStreak = newStreak > profile.longestStreak
-          ? newStreak
-          : profile.longestStreak;
+      final longestStreak =
+          newStreak > profile.longestStreak ? newStreak : profile.longestStreak;
       final addedXp =
           (record.overallScore * 1.5).round() + (streakIncreased ? 50 : 20);
       final totalXp = profile.totalXp + addedXp;
@@ -169,6 +188,37 @@ class FirebaseService {
         'updatedAt': DateTime.now().toIso8601String(),
       });
     });
+  }
+
+  // Lưu FCM token của thiết bị (doc id = token để ghi lại không bị trùng)
+  Future<void> saveFcmToken({
+    required String userId,
+    required String token,
+    required String platform,
+    required String timezone,
+  }) async {
+    final now = DateTime.now().toIso8601String();
+    await _db
+        .collection('users')
+        .doc(userId)
+        .collection('fcm_tokens')
+        .doc(token)
+        .set({
+      'token': token,
+      'platform': platform,
+      'timezone': timezone,
+      'createdAt': now,
+      'updatedAt': now,
+    });
+  }
+
+  Future<void> deleteFcmToken(String userId, String token) async {
+    await _db
+        .collection('users')
+        .doc(userId)
+        .collection('fcm_tokens')
+        .doc(token)
+        .delete();
   }
 
   // Lấy lịch sử luyện phát âm

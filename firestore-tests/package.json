@@ -1,0 +1,14 @@
+{
+  "name": "speakmaster-firestore-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "firebase emulators:exec --config ../firebase.json --only firestore --project demo-speakmaster 'tsx --test rules.test.ts'"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^6.0.0",
+    "firebase": "^13.2.0",
+    "firebase-tools": "^15.34.2",
+    "tsx": "^4.21.0"
+  }
+}

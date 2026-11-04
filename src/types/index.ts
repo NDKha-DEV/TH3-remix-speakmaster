@@ -12,7 +12,17 @@ export interface UserProfile {
   level: number;
   reminderTime: string; // e.g. "20:00"
   reminderEnabled: boolean;
+  timezone?: string; // IANA timezone, e.g. "Asia/Ho_Chi_Minh"
+  lastReminderSentDate?: string; // YYYY-MM-DD in user's timezone, written by Cloud Functions only
   createdAt: string;
+  updatedAt: string;
+}
+
+export interface FcmTokenDoc {
+  token: string;
+  platform: 'web' | 'android' | 'ios' | 'macos' | 'windows' | 'linux' | 'unknown';
+  timezone?: string;
+  createdAt?: string;
   updatedAt: string;
 }
 

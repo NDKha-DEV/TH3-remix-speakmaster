@@ -1,13 +1,14 @@
 rules_version = '2';
+
+// SpeakMaster Firestore security rules.
+// Schema reference: docs/firestore-schema.md (source of truth: firebase-blueprint.json).
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Default deny all
-    match /{document=**} {
-      allow read, write: if false;
-    }
+    // ---------------------------------------------------------------------
+    // Helpers
+    // ---------------------------------------------------------------------
 
-    // Helper functions
     function isSignedIn() {
       return request.auth != null;
     }
@@ -20,45 +21,192 @@ service cloud.firestore {
       return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
-    // User Profile
+    function isDateKey(value) {
+      return value is string && value.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+
+    function isTimeOfDay(value) {
+      return value is string && value.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$');
+    }
+
+    function isBoundedString(value, maxSize) {
+      return value is string && value.size() <= maxSize;
+    }
+
+    function isNonEmptyString(value, maxSize) {
+      return isBoundedString(value, maxSize) && value.size() > 0;
+    }
+
+    // Optional field: absent, null or a bounded string.
+    function isOptionalString(data, key, maxSize) {
+      return !(key in data) || data[key] == null || isBoundedString(data[key], maxSize);
+    }
+
+    function isIntInRange(value, minValue, maxValue) {
+      return value is int && value >= minValue && value <= maxValue;
+    }
+
+    function isScore(value) {
+      return value is number && value >= 0 && value <= 100;
+    }
+
+    function unchanged(key) {
+      return request.resource.data.get(key, null) == resource.data.get(key, null);
+    }
+
+    // ---------------------------------------------------------------------
+    // users/{userId}
+    // ---------------------------------------------------------------------
+
+    function isValidProfile(data) {
+      return data.keys().hasAll(['id', 'email', 'streakCount', 'longestStreak'])
+        && data.keys().hasOnly([
+          'id', 'email', 'displayName', 'photoURL',
+          'dailyGoalMinutes', 'dailyGoalSentences',
+          'streakCount', 'longestStreak', 'lastActiveDate',
+          'totalXp', 'level',
+          'reminderTime', 'reminderEnabled', 'timezone', 'lastReminderSentDate',
+          'createdAt', 'updatedAt'
+        ])
+        && isBoundedString(data.email, 320)
+        && isOptionalString(data, 'displayName', 100)
+        && isOptionalString(data, 'photoURL', 2048)
+        && isIntInRange(data.get('dailyGoalMinutes', 15), 1, 1440)
+        && isIntInRange(data.get('dailyGoalSentences', 10), 1, 1000)
+        && isIntInRange(data.streakCount, 0, 100000)
+        && isIntInRange(data.longestStreak, 0, 100000)
+        && data.longestStreak >= data.streakCount
+        && (data.get('lastActiveDate', '') == '' || isDateKey(data.get('lastActiveDate', '')))
+        && isIntInRange(data.get('totalXp', 0), 0, 100000000)
+        && isIntInRange(data.get('level', 1), 1, 1000000)
+        && isTimeOfDay(data.get('reminderTime', '20:00'))
+        && data.get('reminderEnabled', true) is bool
+        && isOptionalString(data, 'timezone', 64)
+        && isOptionalString(data, 'createdAt', 40)
+        && isOptionalString(data, 'updatedAt', 40);
+    }
+
     match /users/{userId} {
       allow get: if isOwner(userId);
-      allow list: if false; // Users cannot list other users
-      allow create: if isOwner(userId) 
+      allow list: if false; // Users cannot enumerate other users.
+
+      allow create: if isOwner(userId)
         && isValidId(userId)
         && request.resource.data.id == userId
-        && request.resource.data.email is string
-        && request.resource.data.streakCount is number
-        && request.resource.data.longestStreak is number;
+        && isValidProfile(request.resource.data)
+        // Server-managed field.
+        && !('lastReminderSentDate' in request.resource.data)
+        // A brand new profile cannot start with an inflated streak or XP.
+        && request.resource.data.streakCount <= 1
+        && request.resource.data.get('totalXp', 0) <= 500;
+
       allow update: if isOwner(userId)
-        && request.resource.data.id == userId
-        && request.resource.data.email is string
-        && request.resource.data.streakCount is number;
+        && isValidProfile(request.resource.data)
+        && unchanged('id')
+        && unchanged('createdAt')
+        && unchanged('lastReminderSentDate')
+        // Streak can only stay, grow by one day, or reset.
+        && (request.resource.data.streakCount == resource.data.streakCount
+          || request.resource.data.streakCount == resource.data.streakCount + 1
+          || request.resource.data.streakCount <= 1)
+        && request.resource.data.longestStreak >= resource.data.longestStreak
+        // XP never decreases and grows by at most one practice session per write.
+        && request.resource.data.get('totalXp', 0) >= resource.data.get('totalXp', 0)
+        && request.resource.data.get('totalXp', 0) - resource.data.get('totalXp', 0) <= 1000;
+
       allow delete: if isOwner(userId);
 
-      // Pronunciation Practice Records
+      // -------------------------------------------------------------------
+      // users/{userId}/practice_records/{recordId} — immutable history
+      // -------------------------------------------------------------------
       match /practice_records/{recordId} {
         allow get, list: if isOwner(userId);
+
         allow create: if isOwner(userId)
           && isValidId(recordId)
+          && request.resource.data.id == recordId
           && request.resource.data.userId == userId
-          && request.resource.data.targetText is string
-          && request.resource.data.overallScore is number;
-        allow update: if isOwner(userId)
-          && request.resource.data.userId == userId;
+          && request.resource.data.keys().hasAll(['id', 'userId', 'targetText', 'overallScore', 'createdAt'])
+          && request.resource.data.keys().hasOnly([
+            'id', 'userId', 'targetText', 'category', 'difficulty',
+            'overallScore', 'accuracyScore', 'fluencyScore', 'completenessScore',
+            'expectedIpa', 'detectedText', 'feedback', 'mispronouncedWords',
+            'tongueMouthAdvice', 'createdAt'
+          ])
+          && isNonEmptyString(request.resource.data.targetText, 1000)
+          && isOptionalString(request.resource.data, 'category', 50)
+          && isOptionalString(request.resource.data, 'difficulty', 50)
+          && isScore(request.resource.data.overallScore)
+          && isScore(request.resource.data.get('accuracyScore', 0))
+          && isScore(request.resource.data.get('fluencyScore', 0))
+          && isScore(request.resource.data.get('completenessScore', 0))
+          && isOptionalString(request.resource.data, 'expectedIpa', 2000)
+          && isOptionalString(request.resource.data, 'detectedText', 2000)
+          && isOptionalString(request.resource.data, 'feedback', 5000)
+          && isOptionalString(request.resource.data, 'mispronouncedWords', 10000)
+          && isOptionalString(request.resource.data, 'tongueMouthAdvice', 5000)
+          && isNonEmptyString(request.resource.data.createdAt, 40);
+
+        allow update: if false;
         allow delete: if isOwner(userId);
       }
 
-      // Daily Stats & Streaks
+      // -------------------------------------------------------------------
+      // users/{userId}/daily_stats/{dateId} — one doc per local day
+      // -------------------------------------------------------------------
+      function isValidDailyStat(data, dateId) {
+        return data.keys().hasAll(['id', 'userId', 'date', 'minutesSpent', 'sentencesPracticed', 'averageScore', 'goalAchieved'])
+          && data.keys().hasOnly([
+            'id', 'userId', 'date', 'minutesSpent', 'sentencesPracticed',
+            'averageScore', 'goalAchieved', 'updatedAt'
+          ])
+          && data.id == dateId
+          && data.date == dateId
+          && data.userId == userId
+          && isIntInRange(data.minutesSpent, 0, 1440)
+          && isIntInRange(data.sentencesPracticed, 0, 100000)
+          && isScore(data.averageScore)
+          && data.goalAchieved is bool
+          && isOptionalString(data, 'updatedAt', 40);
+      }
+
       match /daily_stats/{dateId} {
         allow get, list: if isOwner(userId);
-        allow create, update: if isOwner(userId)
-          && isValidId(dateId)
-          && request.resource.data.userId == userId
-          && request.resource.data.minutesSpent is number
-          && request.resource.data.sentencesPracticed is number;
+
+        allow create: if isOwner(userId)
+          && isDateKey(dateId)
+          && isValidDailyStat(request.resource.data, dateId);
+
+        allow update: if isOwner(userId)
+          && isValidDailyStat(request.resource.data, dateId)
+          // Progress for a day only accumulates.
+          && request.resource.data.sentencesPracticed >= resource.data.sentencesPracticed
+          && request.resource.data.minutesSpent >= resource.data.minutesSpent;
+
+        allow delete: if isOwner(userId);
+      }
+
+      // -------------------------------------------------------------------
+      // users/{userId}/fcm_tokens/{tokenId} — push registration per device
+      // -------------------------------------------------------------------
+      function isValidFcmToken(data, tokenId) {
+        return data.keys().hasAll(['token', 'platform', 'updatedAt'])
+          && data.keys().hasOnly(['token', 'platform', 'timezone', 'createdAt', 'updatedAt'])
+          && data.token == tokenId
+          && isNonEmptyString(data.token, 4096)
+          && data.platform in ['web', 'android', 'ios', 'macos', 'windows', 'linux', 'unknown']
+          && isOptionalString(data, 'timezone', 64)
+          && isOptionalString(data, 'createdAt', 40)
+          && isNonEmptyString(data.updatedAt, 40);
+      }
+
+      match /fcm_tokens/{tokenId} {
+        allow get, list: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidFcmToken(request.resource.data, tokenId);
         allow delete: if isOwner(userId);
       }
     }
+
+    // Everything else is denied by default (no catch-all match).
   }
 }

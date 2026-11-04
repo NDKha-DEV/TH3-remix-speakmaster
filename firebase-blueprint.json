@@ -18,6 +18,8 @@
         "level": { "type": "number", "description": "Learner level" },
         "reminderTime": { "type": "string", "description": "Preferred daily practice reminder time (HH:mm)" },
         "reminderEnabled": { "type": "boolean", "description": "Whether daily practice reminder is turned on" },
+        "timezone": { "type": "string", "description": "IANA timezone of the user's device (e.g. Asia/Ho_Chi_Minh), used to send the daily reminder at local time" },
+        "lastReminderSentDate": { "type": "string", "description": "Local date (YYYY-MM-DD) the last FCM daily reminder was sent. Written by Cloud Functions only" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Account creation timestamp" },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Account update timestamp" }
       },
@@ -61,6 +63,19 @@
         "updatedAt": { "type": "string", "format": "date-time", "description": "Timestamp of last update" }
       },
       "required": ["id", "userId", "date", "minutesSpent", "sentencesPracticed", "averageScore", "goalAchieved"]
+    },
+    "FcmToken": {
+      "title": "FcmToken",
+      "description": "Firebase Cloud Messaging registration token of one device; document ID equals the token",
+      "type": "object",
+      "properties": {
+        "token": { "type": "string", "description": "FCM registration token (same as document ID)" },
+        "platform": { "type": "string", "enum": ["web", "android", "ios", "macos", "windows", "linux", "unknown"], "description": "Device platform" },
+        "timezone": { "type": "string", "description": "IANA timezone of the device when the token was saved" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Token registration timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last time the token was refreshed" }
+      },
+      "required": ["token", "platform", "updatedAt"]
     }
   },
   "firestore": {
@@ -75,6 +90,10 @@
     "/users/{userId}/daily_stats/{dateId}": {
       "schema": "DailyStat",
       "description": "Daily progress statistics for streak and time tracking"
+    },
+    "/users/{userId}/fcm_tokens/{tokenId}": {
+      "schema": "FcmToken",
+      "description": "Push notification tokens for the user's devices, read by the sendDailyReminders Cloud Function"
     }
   }
 }

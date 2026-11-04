@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 import 'models/models.dart';
 import 'services/firebase_service.dart';
 import 'services/ai_pronunciation_service.dart';
 import 'services/notification_service.dart';
+import 'services/messaging_service.dart';
 import 'screens/auth_screen.dart';
 import 'screens/pronunciation_screen.dart';
 import 'screens/streak_screen.dart';
@@ -16,6 +18,8 @@ import 'services/learning_stats_service.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
+  FirebaseService.configurePersistence();
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
   await NotificationService().init();
   runApp(const SpeakMasterApp());
 }
@@ -81,6 +85,7 @@ class _MainShellState extends State<MainShell> {
             _dailyStats = stats;
           });
         }
+        await _syncReminder(profile, stats);
       } else if (!_guestMode) {
         if (mounted) {
           setState(() => _userProfile = null);
@@ -190,43 +195,55 @@ class _MainShellState extends State<MainShell> {
         },
       );
     }
-    final currentProfile = _userProfile!;
+    final updatedProfile = _userProfile!.copyWith(
+      dailyGoalMinutes: minutes,
+      dailyGoalSentences: sentences,
+      reminderTime: reminderTime,
+      reminderEnabled: reminderEnabled,
+    );
     if (mounted) {
-      setState(() {
-        _userProfile = UserProfile(
-          id: currentProfile.id,
-          email: currentProfile.email,
-          displayName: currentProfile.displayName,
-          photoURL: currentProfile.photoURL,
-          dailyGoalMinutes: minutes,
-          dailyGoalSentences: sentences,
-          streakCount: currentProfile.streakCount,
-          longestStreak: currentProfile.longestStreak,
-          lastActiveDate: currentProfile.lastActiveDate,
-          totalXp: currentProfile.totalXp,
-          level: currentProfile.level,
-          reminderTime: reminderTime,
-          reminderEnabled: reminderEnabled,
-        );
-      });
+      setState(() => _userProfile = updatedProfile);
     }
-    if (reminderEnabled) {
-      final parts = reminderTime.split(':');
-      final hour = int.tryParse(parts[0]) ?? 20;
-      final minute = int.tryParse(parts.length > 1 ? parts[1] : '0') ?? 0;
+    await _syncReminder(updatedProfile, _dailyStats);
+  }
+
+  // Daily reminder: signed-in users with push enabled get it from the
+  // `sendDailyReminders` Cloud Function via FCM (skipped on days already
+  // practiced). Otherwise fall back to an on-device scheduled notification.
+  Future<void> _syncReminder(
+    UserProfile profile,
+    List<DailyStat> dailyStats,
+  ) async {
+    final user = _firebaseService.currentUser;
+    if (!profile.reminderEnabled) {
+      await NotificationService().cancelDailyReminder();
+      return;
+    }
+
+    final pushEnabled =
+        user != null && await MessagingService().registerForUser(user.uid);
+    if (pushEnabled) {
+      await NotificationService().cancelDailyReminder();
+      return;
+    }
+
+    final parts = profile.reminderTime.split(':');
+    final hour = int.tryParse(parts[0]) ?? 20;
+    final minute = int.tryParse(parts.length > 1 ? parts[1] : '0') ?? 0;
+    try {
       await NotificationService().scheduleDailyReminder(
         hour: hour,
         minute: minute,
         streakCount: LearningStatsService.calculateStreak(
-          practiceDates: _dailyStats
+          practiceDates: dailyStats
               .where((stat) => stat.sentencesPracticed > 0)
               .map((stat) => stat.date),
           now: DateTime.now(),
-          longestStreak: currentProfile.longestStreak,
+          longestStreak: profile.longestStreak,
         ).currentStreak,
       );
-    } else {
-      await NotificationService().cancelAll();
+    } catch (err) {
+      debugPrint('Could not schedule local reminder: $err');
     }
   }
 
@@ -305,6 +322,11 @@ class _MainShellState extends State<MainShell> {
             tooltip: 'Đăng xuất Firebase',
             icon: const Icon(Icons.logout),
             onPressed: () async {
+              final user = _firebaseService.currentUser;
+              if (user != null) {
+                await MessagingService().unregister(user.uid);
+              }
+              await NotificationService().cancelDailyReminder();
               await _firebaseService.signOut();
               setState(() {
                 _guestMode = false;
