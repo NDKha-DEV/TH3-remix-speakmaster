@@ -3,42 +3,58 @@ import {
   getDoc,
   setDoc,
   updateDoc,
+  deleteDoc,
   collection,
   query,
-  where,
   orderBy,
   limit,
   getDocs,
-  Timestamp
+  writeBatch
 } from 'firebase/firestore';
 import { User } from 'firebase/auth';
 import { db, handleFirestoreError, OperationType } from './config';
-import { UserProfile, PracticeRecord, DailyStat } from '../types';
+import { UserProfile, PracticeRecord, DailyStat, FcmTokenDoc } from '../types';
 
-export function getTodayDateString(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-export function getYesterdayDateString(): string {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
+function toDateKey(d: Date): string {
   const year = d.getFullYear();
   const month = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
 
+export function getTodayDateString(): string {
+  return toDateKey(new Date());
+}
+
+export function getYesterdayDateString(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return toDateKey(d);
+}
+
+// IANA timezone of this device, used by the server to send reminders at local time.
+export function getDeviceTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Ho_Chi_Minh';
+  } catch {
+    return 'Asia/Ho_Chi_Minh';
+  }
+}
+
 // Fetch or create user profile
 export async function getOrCreateUserProfile(user: User): Promise<UserProfile> {
   const userRef = doc(db, 'users', user.uid);
+  const timezone = getDeviceTimezone();
   try {
     const snap = await getDoc(userRef);
     if (snap.exists()) {
-      return snap.data() as UserProfile;
+      const profile = snap.data() as UserProfile;
+      // Keep the stored timezone in sync so the daily reminder fires at local time.
+      if (profile.timezone !== timezone) {
+        await updateUserProfile(user.uid, { timezone });
+        return { ...profile, timezone };
+      }
+      return profile;
     }
 
     const today = getTodayDateString();
@@ -56,6 +72,7 @@ export async function getOrCreateUserProfile(user: User): Promise<UserProfile> {
       level: 1,
       reminderTime: '20:00',
       reminderEnabled: true,
+      timezone,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -82,26 +99,6 @@ export async function updateUserProfile(userId: string, updates: Partial<UserPro
   }
 }
 
-// Save practice record
-export async function savePracticeRecord(userId: string, record: Omit<PracticeRecord, 'id' | 'userId' | 'createdAt'>): Promise<PracticeRecord> {
-  const recordId = `rec_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-  const recordRef = doc(db, 'users', userId, 'practice_records', recordId);
-  const fullRecord: PracticeRecord = {
-    ...record,
-    id: recordId,
-    userId,
-    createdAt: new Date().toISOString()
-  };
-
-  try {
-    await setDoc(recordRef, fullRecord);
-    return fullRecord;
-  } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, `users/${userId}/practice_records/${recordId}`);
-    throw error;
-  }
-}
-
 // Fetch practice records
 export async function fetchPracticeHistory(userId: string, count = 20): Promise<PracticeRecord[]> {
   const recordsCol = collection(db, 'users', userId, 'practice_records');
@@ -116,53 +113,57 @@ export async function fetchPracticeHistory(userId: string, count = 20): Promise<
   }
 }
 
-// Record daily stats and update streak
-export async function recordPracticeActivity(
+export type PracticeRecordInput = Omit<PracticeRecord, 'id' | 'userId' | 'createdAt'>;
+
+// Save a practice record, today's stat and the streak/XP update in one atomic batch.
+// Batches (unlike transactions) are queued by the offline cache and synced later.
+export async function recordPracticeSession(
   userId: string,
   userProfile: UserProfile,
+  recordInput: PracticeRecordInput,
   minutesAdded: number,
   score: number
-): Promise<{ updatedProfile: UserProfile; todayStat: DailyStat; streakIncreased: boolean }> {
+): Promise<{ record: PracticeRecord; updatedProfile: UserProfile; todayStat: DailyStat; streakIncreased: boolean }> {
   const today = getTodayDateString();
   const yesterday = getYesterdayDateString();
-  const dateRef = doc(db, 'users', userId, 'daily_stats', today);
+  const now = new Date().toISOString();
+  const userRef = doc(db, 'users', userId);
+  const statRef = doc(db, 'users', userId, 'daily_stats', today);
+  const recordId = `rec_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const recordRef = doc(db, 'users', userId, 'practice_records', recordId);
 
-  let currentStat: DailyStat;
+  const record: PracticeRecord = {
+    ...recordInput,
+    id: recordId,
+    userId,
+    createdAt: now
+  };
+
+  let existingStat: DailyStat | null = null;
   try {
-    const snap = await getDoc(dateRef);
-    if (snap.exists()) {
-      const data = snap.data() as DailyStat;
-      const totalSentences = data.sentencesPracticed + 1;
-      const newAvg = Math.round((data.averageScore * data.sentencesPracticed + score) / totalSentences);
-      const newMinutes = data.minutesSpent + minutesAdded;
-      currentStat = {
-        id: today,
-        userId,
-        date: today,
-        minutesSpent: newMinutes,
-        sentencesPracticed: totalSentences,
-        averageScore: newAvg,
-        goalAchieved: newMinutes >= userProfile.dailyGoalMinutes || totalSentences >= userProfile.dailyGoalSentences,
-        updatedAt: new Date().toISOString()
-      };
-      await setDoc(dateRef, currentStat);
-    } else {
-      currentStat = {
-        id: today,
-        userId,
-        date: today,
-        minutesSpent: Math.max(1, minutesAdded),
-        sentencesPracticed: 1,
-        averageScore: score,
-        goalAchieved: minutesAdded >= userProfile.dailyGoalMinutes || 1 >= userProfile.dailyGoalSentences,
-        updatedAt: new Date().toISOString()
-      };
-      await setDoc(dateRef, currentStat);
-    }
+    const snap = await getDoc(statRef);
+    existingStat = snap.exists() ? (snap.data() as DailyStat) : null;
   } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, `users/${userId}/daily_stats/${today}`);
+    handleFirestoreError(err, OperationType.GET, `users/${userId}/daily_stats/${today}`);
     throw err;
   }
+
+  const minutes = Math.max(0, Math.round(minutesAdded));
+  const sentencesPracticed = (existingStat?.sentencesPracticed ?? 0) + 1;
+  const minutesSpent = (existingStat?.minutesSpent ?? 0) + Math.max(1, minutes);
+  const averageScore = Math.round(
+    ((existingStat?.averageScore ?? 0) * (existingStat?.sentencesPracticed ?? 0) + score) / sentencesPracticed
+  );
+  const todayStat: DailyStat = {
+    id: today,
+    userId,
+    date: today,
+    minutesSpent,
+    sentencesPracticed,
+    averageScore,
+    goalAchieved: minutesSpent >= userProfile.dailyGoalMinutes || sentencesPracticed >= userProfile.dailyGoalSentences,
+    updatedAt: now
+  };
 
   // Calculate streak update
   let newStreak = userProfile.streakCount;
@@ -185,25 +186,33 @@ export async function recordPracticeActivity(
   const totalXp = userProfile.totalXp + addedXp;
   const level = Math.floor(totalXp / 500) + 1;
 
-  const updatedProfile: UserProfile = {
-    ...userProfile,
+  const profileUpdates = {
     streakCount: newStreak,
     longestStreak,
     lastActiveDate: today,
     totalXp,
     level,
-    updatedAt: new Date().toISOString()
+    updatedAt: now
   };
 
-  await updateUserProfile(userId, {
-    streakCount: newStreak,
-    longestStreak,
-    lastActiveDate: today,
-    totalXp,
-    level
-  });
+  const batch = writeBatch(db);
+  batch.set(recordRef, record);
+  batch.set(statRef, todayStat);
+  batch.update(userRef, profileUpdates);
 
-  return { updatedProfile, todayStat: currentStat, streakIncreased };
+  try {
+    await batch.commit();
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `users/${userId}`);
+    throw err;
+  }
+
+  return {
+    record,
+    updatedProfile: { ...userProfile, ...profileUpdates },
+    todayStat,
+    streakIncreased
+  };
 }
 
 // Fetch last 7 days of stats for graphs
@@ -216,5 +225,31 @@ export async function fetchRecentDailyStats(userId: string): Promise<DailyStat[]
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, `users/${userId}/daily_stats`);
     return [];
+  }
+}
+
+// Register this device for FCM push (doc id = token so re-saving is idempotent).
+export async function saveFcmToken(userId: string, token: string, platform: FcmTokenDoc['platform']): Promise<void> {
+  const tokenRef = doc(db, 'users', userId, 'fcm_tokens', token);
+  const now = new Date().toISOString();
+  const data: FcmTokenDoc = {
+    token,
+    platform,
+    timezone: getDeviceTimezone(),
+    createdAt: now,
+    updatedAt: now
+  };
+  try {
+    await setDoc(tokenRef, data);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `users/${userId}/fcm_tokens/${token}`);
+  }
+}
+
+export async function deleteFcmToken(userId: string, token: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'users', userId, 'fcm_tokens', token));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `users/${userId}/fcm_tokens/${token}`);
   }
 }

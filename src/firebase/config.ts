@@ -1,6 +1,13 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
-import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
+import {
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  memoryLocalCache,
+  doc,
+  getDocFromServer,
+} from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 export enum OperationType {
@@ -31,8 +38,29 @@ export interface FirestoreErrorInfo {
 
 export const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
+// Offline persistence: IndexedDB cache shared across tabs, so history/streaks load
+// instantly and practice results queue while offline. Falls back to memory cache
+// where IndexedDB is unavailable (e.g. some private browsing modes).
+function createLocalCache() {
+  try {
+    if (typeof indexedDB !== 'undefined') {
+      return persistentLocalCache({ tabManager: persistentMultipleTabManager() });
+    }
+  } catch (err) {
+    console.warn('Firestore persistent cache unavailable, using memory cache.', err);
+  }
+  return memoryLocalCache();
+}
+
 /* CRITICAL: The app will break without passing firestoreDatabaseId */
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const db = initializeFirestore(
+  app,
+  {
+    localCache: createLocalCache(),
+    ignoreUndefinedProperties: true,
+  },
+  firebaseConfig.firestoreDatabaseId
+);
 
 export const googleProvider = new GoogleAuthProvider();
 
