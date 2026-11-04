@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { User, signInWithPopup, signOut } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase/config';
+import { removeWebPushToken } from '../firebase/messaging';
 import { UserProfile } from '../types';
 import { LogIn, LogOut, UserCheck, Shield, Sparkles, X, CheckCircle2 } from 'lucide-react';
 
@@ -41,6 +42,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const handleSignOut = async () => {
     try {
       setLoading(true);
+      if (auth.currentUser) {
+        await removeWebPushToken(auth.currentUser.uid);
+      }
       await signOut(auth);
       onClose();
     } catch (err: any) {

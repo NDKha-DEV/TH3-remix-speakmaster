@@ -14,6 +14,8 @@ class UserProfile {
   final int level;
   final String reminderTime;
   final bool reminderEnabled;
+  // IANA timezone (e.g. "Asia/Ho_Chi_Minh") used by the server-side reminder.
+  final String? timezone;
 
   UserProfile({
     required this.id,
@@ -29,6 +31,7 @@ class UserProfile {
     this.level = 1,
     this.reminderTime = '20:00',
     this.reminderEnabled = true,
+    this.timezone,
   });
 
   factory UserProfile.fromMap(Map<String, dynamic> map) {
@@ -46,6 +49,32 @@ class UserProfile {
       level: (map['level'] ?? 1).toInt(),
       reminderTime: map['reminderTime'] ?? '20:00',
       reminderEnabled: map['reminderEnabled'] ?? true,
+      timezone: map['timezone'],
+    );
+  }
+
+  UserProfile copyWith({
+    int? dailyGoalMinutes,
+    int? dailyGoalSentences,
+    String? reminderTime,
+    bool? reminderEnabled,
+    String? timezone,
+  }) {
+    return UserProfile(
+      id: id,
+      email: email,
+      displayName: displayName,
+      photoURL: photoURL,
+      dailyGoalMinutes: dailyGoalMinutes ?? this.dailyGoalMinutes,
+      dailyGoalSentences: dailyGoalSentences ?? this.dailyGoalSentences,
+      streakCount: streakCount,
+      longestStreak: longestStreak,
+      lastActiveDate: lastActiveDate,
+      totalXp: totalXp,
+      level: level,
+      reminderTime: reminderTime ?? this.reminderTime,
+      reminderEnabled: reminderEnabled ?? this.reminderEnabled,
+      timezone: timezone ?? this.timezone,
     );
   }
 
@@ -64,6 +93,7 @@ class UserProfile {
       'level': level,
       'reminderTime': reminderTime,
       'reminderEnabled': reminderEnabled,
+      if (timezone != null) 'timezone': timezone,
       'updatedAt': DateTime.now().toIso8601String(),
     };
   }

@@ -4,11 +4,11 @@ import { auth } from './firebase/config';
 import {
   getOrCreateUserProfile,
   updateUserProfile,
-  recordPracticeActivity,
+  recordPracticeSession,
   fetchPracticeHistory,
-  fetchRecentDailyStats,
-  savePracticeRecord
+  fetchRecentDailyStats
 } from './firebase/service';
+import { syncWebPushToken } from './firebase/messaging';
 import { UserProfile, PracticeRecord, DailyStat, PronunciationResult, LessonSentence } from './types';
 import { Navbar } from './components/Navbar';
 import { PronunciationStudio } from './components/PronunciationStudio';
@@ -52,6 +52,10 @@ export default function App() {
           setHistory(userHistory);
           const stats = await fetchRecentDailyStats(user.uid);
           setDailyStats(stats);
+          // Refresh the push token silently if permission was granted earlier.
+          if (profile.reminderEnabled) {
+            void syncWebPushToken(user.uid, { prompt: false });
+          }
         } catch (err) {
           console.warn('Error loading user data from Firestore:', err);
         }
@@ -160,25 +164,25 @@ export default function App() {
 
     if (currentUser) {
       try {
-        await savePracticeRecord(currentUser.uid, {
-          targetText: newRecord.targetText,
-          category: newRecord.category,
-          difficulty: newRecord.difficulty,
-          overallScore: newRecord.overallScore,
-          accuracyScore: newRecord.accuracyScore,
-          fluencyScore: newRecord.fluencyScore,
-          completenessScore: newRecord.completenessScore,
-          expectedIpa: newRecord.expectedIpa,
-          feedback: newRecord.feedback,
-          tongueMouthAdvice: newRecord.tongueMouthAdvice
-        });
-
-        const { updatedProfile, todayStat } = await recordPracticeActivity(
+        const { record, updatedProfile, todayStat } = await recordPracticeSession(
           currentUser.uid,
           userProfile,
+          {
+            targetText: newRecord.targetText,
+            category: newRecord.category,
+            difficulty: newRecord.difficulty,
+            overallScore: newRecord.overallScore,
+            accuracyScore: newRecord.accuracyScore,
+            fluencyScore: newRecord.fluencyScore,
+            completenessScore: newRecord.completenessScore,
+            expectedIpa: newRecord.expectedIpa,
+            feedback: newRecord.feedback,
+            tongueMouthAdvice: newRecord.tongueMouthAdvice
+          },
           minutes,
           score
         );
+        setHistory((prev) => prev.map((r) => (r.id === newRecord.id ? record : r)));
         setUserProfile(updatedProfile);
         setDailyStats((prev) => {
           const idx = prev.findIndex((s) => s.date === todayStat.date);
@@ -187,7 +191,8 @@ export default function App() {
             copy[idx] = todayStat;
             return copy;
           }
-          return [todayStat, ...prev];
+          // Stats are kept oldest-first (see fetchRecentDailyStats).
+          return [...prev, todayStat].slice(-7);
         });
       } catch (err) {
         console.warn('Could not save practice to Firestore:', err);
@@ -219,6 +224,13 @@ export default function App() {
     setUserProfile(updated);
     if (currentUser) {
       await updateUserProfile(currentUser.uid, { reminderEnabled: enabled, reminderTime: time });
+      if (enabled) {
+        // Called from the "save settings" click, so the permission prompt is allowed here.
+        const status = await syncWebPushToken(currentUser.uid, { prompt: true });
+        if (status !== 'enabled') {
+          console.info(`Web push reminder not active on this browser: ${status}`);
+        }
+      }
     }
   };
 
