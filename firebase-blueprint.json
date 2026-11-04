@@ -42,6 +42,8 @@
         "feedback": { "type": "string", "description": "AI analysis summary in Vietnamese" },
         "mispronouncedWords": { "type": "string", "description": "Serialized list or details of mispronounced segments" },
         "tongueMouthAdvice": { "type": "string", "description": "Guide on tongue and mouth placement for errors" },
+        "assessmentId": { "type": "string", "description": "M4 attempt id (pronunciation_attempts/{id}) to reopen the detailed phoneme analysis" },
+        "scoringSource": { "type": "string", "description": "api | gemini | ruleBased: which engine scored this session" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp when practice occurred" }
       },
       "required": ["id", "userId", "targetText", "overallScore", "createdAt"]
@@ -61,6 +63,40 @@
         "updatedAt": { "type": "string", "format": "date-time", "description": "Timestamp of last update" }
       },
       "required": ["id", "userId", "date", "minutesSpent", "sentencesPracticed", "averageScore", "goalAchieved"]
+    },
+    "PronunciationAttempt": {
+      "title": "PronunciationAttempt",
+      "description": "M4 assessment written by the Pronunciation API (Admin SDK); same shape as the API response",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Attempt ID" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Assessment timestamp" },
+        "referenceText": { "type": "string", "description": "Target sentence" },
+        "recognizedText": { "type": "string", "description": "Recognized text (azure) or heard IPA (local)" },
+        "locale": { "type": "string", "description": "en-US" },
+        "exerciseId": { "type": "string", "description": "Exercise ID, if any" },
+        "provider": { "type": "string", "description": "local | azure | mock" },
+        "durationMs": { "type": "number", "description": "Audio duration" },
+        "level": { "type": "string", "description": "excellent | good | fair | needs_work" },
+        "scores": { "type": "object", "description": "pronunciation, accuracy, fluency, completeness (0-100), prosody (0-100 or null)" },
+        "words": { "type": "array", "description": "word, ipa, accuracy, errorType, isError, phonemes[expected, actual, accuracy, isError, errorKind, pattern, position]" },
+        "feedback": { "type": "array", "description": "priority, kind, target, messageVi, messageEn, minimalPair, practiceWords, exerciseIds" }
+      },
+      "required": ["id", "createdAt", "referenceText", "provider", "scores", "level", "words", "feedback"]
+    },
+    "PhonemeStat": {
+      "title": "PhonemeStat",
+      "description": "Per-user aggregate accuracy for one phoneme (doc id = ARPAbet, e.g. TH)",
+      "type": "object",
+      "properties": {
+        "phoneme": { "type": "string", "description": "IPA symbol" },
+        "attempts": { "type": "number", "description": "Times this phoneme was assessed" },
+        "errorCount": { "type": "number", "description": "Times it was wrong" },
+        "avgAccuracy": { "type": "number", "description": "Average accuracy 0-100" },
+        "lastAccuracy": { "type": "number", "description": "Most recent accuracy" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last update" }
+      },
+      "required": ["phoneme", "attempts", "errorCount", "avgAccuracy"]
     }
   },
   "firestore": {
@@ -75,6 +111,14 @@
     "/users/{userId}/daily_stats/{dateId}": {
       "schema": "DailyStat",
       "description": "Daily progress statistics for streak and time tracking"
+    },
+    "/users/{userId}/pronunciation_attempts/{attemptId}": {
+      "schema": "PronunciationAttempt",
+      "description": "M4 assessments, server-written, read-only for the owner"
+    },
+    "/users/{userId}/phoneme_stats/{phonemeId}": {
+      "schema": "PhonemeStat",
+      "description": "Weakest phonemes per user, server-written, read-only for the owner"
     }
   }
 }

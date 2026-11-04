@@ -49,6 +49,22 @@ service cloud.firestore {
         allow delete: if isOwner(userId);
       }
 
+      // M4 – AI Pronunciation: chỉ server (Admin SDK) ghi, nên client
+      // không thể tự sửa điểm hay thống kê âm vị.
+      match /pronunciation_attempts/{attemptId} {
+        allow get, list: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /phoneme_stats/{phonemeId} {
+        allow get, list: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /pronunciation_idempotency/{key} {
+        allow read, write: if false;
+      }
+
       // Daily Stats & Streaks
       match /daily_stats/{dateId} {
         allow get, list: if isOwner(userId);
