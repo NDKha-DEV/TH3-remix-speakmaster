@@ -1,0 +1,80 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile information, settings, and streak metrics",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "User ID" },
+        "email": { "type": "string", "description": "User email address" },
+        "displayName": { "type": "string", "description": "Display name of the user" },
+        "photoURL": { "type": "string", "description": "Profile picture URL" },
+        "dailyGoalMinutes": { "type": "number", "description": "Daily learning time target in minutes" },
+        "dailyGoalSentences": { "type": "number", "description": "Daily target number of sentences/words" },
+        "streakCount": { "type": "number", "description": "Current consecutive active days" },
+        "longestStreak": { "type": "number", "description": "Maximum consecutive active days achieved" },
+        "lastActiveDate": { "type": "string", "description": "Last active practice date in YYYY-MM-DD format" },
+        "totalXp": { "type": "number", "description": "Total experience points gained" },
+        "level": { "type": "number", "description": "Learner level" },
+        "reminderTime": { "type": "string", "description": "Preferred daily practice reminder time (HH:mm)" },
+        "reminderEnabled": { "type": "boolean", "description": "Whether daily practice reminder is turned on" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Account creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Account update timestamp" }
+      },
+      "required": ["id", "email", "streakCount", "longestStreak"]
+    },
+    "PracticeRecord": {
+      "title": "PracticeRecord",
+      "description": "Individual pronunciation evaluation and phoneme analysis record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Record ID" },
+        "userId": { "type": "string", "description": "Owner user ID" },
+        "targetText": { "type": "string", "description": "The phrase or sentence targeted for pronunciation" },
+        "category": { "type": "string", "description": "Category (e.g. Daily, Business, IELTS, Academic)" },
+        "difficulty": { "type": "string", "description": "Difficulty level (Beginner, Intermediate, Advanced)" },
+        "overallScore": { "type": "number", "description": "Pronunciation score out of 100" },
+        "accuracyScore": { "type": "number", "description": "Phoneme accuracy score out of 100" },
+        "fluencyScore": { "type": "number", "description": "Fluency and rhythm score out of 100" },
+        "completenessScore": { "type": "number", "description": "Completeness score out of 100" },
+        "expectedIpa": { "type": "string", "description": "Standard IPA transcription" },
+        "detectedText": { "type": "string", "description": "Text transcribed by speech recognition" },
+        "feedback": { "type": "string", "description": "AI analysis summary in Vietnamese" },
+        "mispronouncedWords": { "type": "string", "description": "Serialized list or details of mispronounced segments" },
+        "tongueMouthAdvice": { "type": "string", "description": "Guide on tongue and mouth placement for errors" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp when practice occurred" }
+      },
+      "required": ["id", "userId", "targetText", "overallScore", "createdAt"]
+    },
+    "DailyStat": {
+      "title": "DailyStat",
+      "description": "Daily summary of practice time and progress towards goals",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Date string identifier YYYY-MM-DD" },
+        "userId": { "type": "string", "description": "Owner user ID" },
+        "date": { "type": "string", "description": "Date format YYYY-MM-DD" },
+        "minutesSpent": { "type": "number", "description": "Total practice minutes on this day" },
+        "sentencesPracticed": { "type": "number", "description": "Number of sentences practiced" },
+        "averageScore": { "type": "number", "description": "Average pronunciation score for the day" },
+        "goalAchieved": { "type": "boolean", "description": "Whether daily goal was met" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Timestamp of last update" }
+      },
+      "required": ["id", "userId", "date", "minutesSpent", "sentencesPracticed", "averageScore", "goalAchieved"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile with streak, goals, and reminder settings"
+    },
+    "/users/{userId}/practice_records/{recordId}": {
+      "schema": "PracticeRecord",
+      "description": "User speech practice history and phoneme evaluation reports"
+    },
+    "/users/{userId}/daily_stats/{dateId}": {
+      "schema": "DailyStat",
+      "description": "Daily progress statistics for streak and time tracking"
+    }
+  }
+}

@@ -1,0 +1,64 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // User Profile
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow list: if false; // Users cannot list other users
+      allow create: if isOwner(userId) 
+        && isValidId(userId)
+        && request.resource.data.id == userId
+        && request.resource.data.email is string
+        && request.resource.data.streakCount is number
+        && request.resource.data.longestStreak is number;
+      allow update: if isOwner(userId)
+        && request.resource.data.id == userId
+        && request.resource.data.email is string
+        && request.resource.data.streakCount is number;
+      allow delete: if isOwner(userId);
+
+      // Pronunciation Practice Records
+      match /practice_records/{recordId} {
+        allow get, list: if isOwner(userId);
+        allow create: if isOwner(userId)
+          && isValidId(recordId)
+          && request.resource.data.userId == userId
+          && request.resource.data.targetText is string
+          && request.resource.data.overallScore is number;
+        allow update: if isOwner(userId)
+          && request.resource.data.userId == userId;
+        allow delete: if isOwner(userId);
+      }
+
+      // Daily Stats & Streaks
+      match /daily_stats/{dateId} {
+        allow get, list: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && isValidId(dateId)
+          && request.resource.data.userId == userId
+          && request.resource.data.minutesSpent is number
+          && request.resource.data.sentencesPracticed is number;
+        allow delete: if isOwner(userId);
+      }
+    }
+  }
+}

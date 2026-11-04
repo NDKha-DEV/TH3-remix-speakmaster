@@ -1,0 +1,10 @@
+{
+  "name": "Remix SpeakMaster - AI English Pronunciation \u0026 Streak Tracker",
+  "description": "Ứng dụng luyện phát âm tiếng Anh với AI chấm điểm âm vị chuẩn xác, theo dõi chuỗi streak kỷ luật, nhắc nhở học tập và đồng bộ dữ liệu Firebase.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
