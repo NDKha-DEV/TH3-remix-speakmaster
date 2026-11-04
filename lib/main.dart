@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'models/assessment.dart';
 import 'models/models.dart';
 import 'services/firebase_service.dart';
 import 'services/ai_pronunciation_service.dart';
+import 'services/pronunciation_api.dart';
+import 'services/pronunciation_engine.dart';
 import 'services/notification_service.dart';
 import 'screens/auth_screen.dart';
 import 'screens/pronunciation_screen.dart';
@@ -56,8 +59,25 @@ class MainShell extends StatefulWidget {
 
 class _MainShellState extends State<MainShell> {
   final FirebaseService _firebaseService = FirebaseService();
-  final AIPronunciationService _aiService = AIPronunciationService(
-    apiKey: const String.fromEnvironment('GEMINI_API_KEY', defaultValue: ''),
+  // M4: Pronunciation API (chấm trên audio). Cấu hình khi build/run:
+  //   --dart-define=PRONUN_API_BASE=http://10.0.2.2:8000
+  //   --dart-define=PRONUN_DEBUG_UID=demo   (chỉ khi server chạy AUTH_MODE=dev)
+  // Không cấu hình → dùng Gemini/bộ luật dựa trên transcript làm dự phòng.
+  static const _apiBase = String.fromEnvironment('PRONUN_API_BASE');
+  static const _debugUid = String.fromEnvironment('PRONUN_DEBUG_UID');
+
+  late final PronunciationEngine _engine = PronunciationEngine(
+    api: _apiBase.isEmpty
+        ? null
+        : PronunciationApi(
+            baseUrl: _apiBase,
+            debugUid: _debugUid.isEmpty ? null : _debugUid,
+            idToken: ({bool forceRefresh = false}) async =>
+                FirebaseAuth.instance.currentUser?.getIdToken(forceRefresh),
+          ),
+    fallback: AIPronunciationService(
+      apiKey: const String.fromEnvironment('GEMINI_API_KEY', defaultValue: ''),
+    ),
   );
 
   int _selectedIndex = 0;
@@ -108,13 +128,18 @@ class _MainShellState extends State<MainShell> {
   }
 
   Future<void> _handlePracticeCompleted(
-    int minutes,
-    int score,
-    PronunciationResult result,
+    Assessment result,
     LessonSentence sentence,
   ) async {
     if (_userProfile == null) return;
 
+    final score = result.overallScore;
+    // Thời gian luyện thực tế (làm tròn lên phút, tối thiểu 1 phút mỗi phiên).
+    final minutes = (result.durationMs / 60000).ceil().clamp(1, 60);
+    final mouthTip = result.feedback
+        .where((f) => f.kind == 'phoneme' || f.target == 'mouth')
+        .map((f) => f.messageVi)
+        .firstOrNull;
     final record = PracticeRecord(
       id: 'rec_${DateTime.now().microsecondsSinceEpoch}',
       userId: _userProfile!.id,
@@ -122,13 +147,15 @@ class _MainShellState extends State<MainShell> {
       category: sentence.category,
       difficulty: sentence.difficulty,
       overallScore: score,
-      accuracyScore: result.accuracyScore,
-      fluencyScore: result.fluencyScore,
-      completenessScore: result.completenessScore,
-      expectedIpa: result.expectedIpa,
-      feedback: result.vietnameseSummary,
-      tongueMouthAdvice: result.tongueMouthAdvice,
+      accuracyScore: result.scores.accuracy.round(),
+      fluencyScore: result.scores.fluency.round(),
+      completenessScore: result.scores.completeness.round(),
+      expectedIpa: result.expectedIpa.isEmpty ? sentence.ipa : result.expectedIpa,
+      feedback: result.summaryVi,
+      tongueMouthAdvice: mouthTip,
       createdAt: DateTime.now().toIso8601String(),
+      assessmentId: result.id,
+      scoringSource: result.source.name,
     );
     final today = LearningStatsService.dateKey(DateTime.now());
     final currentStat = LearningStatsService.statForDate(_dailyStats, today);
@@ -254,7 +281,7 @@ class _MainShellState extends State<MainShell> {
         onOpenPractice: () => setState(() => _selectedIndex = 1),
       ),
       PronunciationScreen(
-        aiService: _aiService,
+        engine: _engine,
         onPracticeCompleted: _handlePracticeCompleted,
       ),
       StreakScreen(
@@ -266,6 +293,7 @@ class _MainShellState extends State<MainShell> {
         userProfile: _userProfile!,
         history: _history,
         dailyStats: _dailyStats,
+        engine: _engine,
       ),
     ];
 

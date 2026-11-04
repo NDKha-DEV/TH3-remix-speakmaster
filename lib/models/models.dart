@@ -184,6 +184,12 @@ class PracticeRecord {
   final String createdAt;
   final bool hasScore;
 
+  /// Id lần chấm M4 (Pronunciation API `Attempt.id`) để mở lại chi tiết.
+  final String? assessmentId;
+
+  /// api | gemini | ruleBased — nguồn chấm điểm của phiên này.
+  final String? scoringSource;
+
   PracticeRecord({
     required this.id,
     required this.userId,
@@ -199,6 +205,8 @@ class PracticeRecord {
     this.tongueMouthAdvice,
     required this.createdAt,
     this.hasScore = true,
+    this.assessmentId,
+    this.scoringSource,
   });
 
   factory PracticeRecord.fromMap(Map<String, dynamic> map) {
@@ -217,6 +225,8 @@ class PracticeRecord {
       tongueMouthAdvice: map['tongueMouthAdvice'],
       createdAt: map['createdAt'] ?? DateTime.now().toIso8601String(),
       hasScore: map['overallScore'] is num,
+      assessmentId: map['assessmentId'],
+      scoringSource: map['scoringSource'],
     );
   }
 
@@ -235,6 +245,8 @@ class PracticeRecord {
       'feedback': feedback,
       'tongueMouthAdvice': tongueMouthAdvice,
       'createdAt': createdAt,
+      if (assessmentId != null) 'assessmentId': assessmentId,
+      if (scoringSource != null) 'scoringSource': scoringSource,
     };
   }
 }
